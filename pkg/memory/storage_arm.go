@@ -1,4 +1,4 @@
-package cmd
+package memory
 
 // Copyright (c) 2018 Bhojpur Consulting Private Limited, India. All rights reserved.
 
@@ -20,41 +20,28 @@ package cmd
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-import (
-	"fmt"
-	"os"
+import "unsafe"
 
-	log "github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
-)
+// maxMapSize represents the largest mmap size supported by Bhojpur Cache
+// in-memory database storage engine.
+const maxMapSize = 0x7FFFFFFF // 2GB
 
-var verbose bool
+// maxAllocSize is the size used when creating array pointers.
+const maxAllocSize = 0xFFFFFFF
 
-// rootCmd represents the base command when called without any subcommands
-var rootCmd = &cobra.Command{
-	Use:   "cachesvr",
-	Short: "Bhojpur CacheEngine is a high-performance data caching server for distributed applications",
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		if verbose {
-			log.SetLevel(log.DebugLevel)
-			log.Debug("verbose logging enabled")
-		}
-	},
-
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	//	Run: func(cmd *cobra.Command, args []string) { },
-}
-
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
-func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-}
+// Are unaligned load/stores broken on this arch?
+var brokenUnaligned bool
 
 func init() {
-	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "en/disable verbose logging")
+	// Simple check to see whether this arch handles unaligned load/stores
+	// correctly.
+
+	// ARM9 and older devices require load/stores to be from/to aligned
+	// addresses. If not, the lower 2 bits are cleared and that address is
+	// read in a jumbled up order.
+
+	raw := [6]byte{0xfe, 0xef, 0x11, 0x22, 0x22, 0x11}
+	val := *(*uint32)(unsafe.Pointer(uintptr(unsafe.Pointer(&raw)) + 2))
+
+	brokenUnaligned = val != 0x11222211
 }
