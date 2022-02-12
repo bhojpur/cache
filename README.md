@@ -1,6 +1,6 @@
 # Bhojpur Cache - Management Engine
 
-The Bhojpur Cache is a high-performance data caching platform applied within [Bhojpur.NET Platform](http://github.com/bhojpur/platform) for delivering web-scalable applications or services. It could utilize different kinds of data storage engines (e.g., in-memory, file-based) depending on the application's use cases.
+The Bhojpur Cache is a high-performance data caching platform applied within [Bhojpur.NET Platform](https://github.com/bhojpur/platform) for delivering web-scalable applications or services. It could utilize different kinds of data storage engines (e.g., in-memory, file-based) depending on the application's use cases.
 
 ## Key Features
 
@@ -10,7 +10,7 @@ The Bhojpur Cache is a high-performance data caching platform applied within [Bh
 
 ## Getting Started
 
-To install [Bhojpur Cache](http://github.com/bhojpur/cache), use the `go get` command:
+To install [Bhojpur Cache](https://github.com/bhojpur/cache), use the `go get` command:
 
 ```sh
 $ go get github.com/bhojpur/cache/...
@@ -18,7 +18,7 @@ $ go get github.com/bhojpur/cache/...
 
 ## Introspection Dashboard
 
-To debug the [Bhojpur Cache](http://github.com/bhojpur/cache), you can add an
+To debug the [Bhojpur Cache](https://github.com/bhojpur/cache), you can add an
 introspection handler to an HTTP mux and get bettervisibility into in-memory
 database storage engine's behaviour. For example
 
@@ -37,12 +37,12 @@ $ bin/cachedbg ./internal/path/to/my.db
 ```
 
 After pointing your web browser to `http://localhost:3000`, you should see something like this 
-[Bhojpur Cache](http://github.com/bhojpur/cache/internal/debugger.png)
+![Introspection Dashboard](/internal/debugger.png "Bhojpur Cache - In-Memory Database")
 
-It allows you to introspect [Bhojpur Cache](http://github.com/bhojpur/cache)
+It allows you to introspect [Bhojpur Cache](https://github.com/bhojpur/cache)
 database in a web browser. The `bin/cachedbg` tool gives you access to
 low-level page information and b-tree structures so you can better understand
-how [Bhojpur Cache](http://github.com/bhojpur/cache) is laying out your data.
+how [Bhojpur Cache](https://github.com/bhojpur/cache) is laying out your data.
 
 ## HTTP Integration
 
@@ -52,7 +52,7 @@ simply add the handler to your muxer:
 To generate a custom web template, you need the following tool
 
 ```sh
-sh go get github.com/benbjohnson/ego
+$ go get github.com/benbjohnson/ego
 ```
 
 ## Distributed Applications

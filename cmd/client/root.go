@@ -62,7 +62,7 @@ var rootCmdOpts struct {
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "cachectl",
-	Short: "Bhojpur Cachectl is a command & control client engine for distributed cache",
+	Short: "Bhojpur Cachectl is a command & control client engine for distributed cache engine",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		if verbose {
 			log.SetLevel(log.DebugLevel)
