@@ -28,8 +28,57 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bhojpur/cache/pkg/memory"
+	memcache "github.com/bhojpur/cache/pkg/memory"
 )
+
+// TestTx_Check_ReadOnly tests consistency checking on a ReadOnly database.
+func TestTx_Check_ReadOnly(t *testing.T) {
+	db := MustOpenDB()
+	defer db.Close()
+	if err := db.Update(func(tx *memcache.Tx) error {
+		b, err := tx.CreateBucket([]byte("widgets"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Put([]byte("foo"), []byte("bar")); err != nil {
+			t.Fatal(err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	readOnlyDB, err := memcache.Open(db.f, 0666, &memcache.Options{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnlyDB.Close()
+
+	tx, err := readOnlyDB.Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ReadOnly DB will load freelist on Check call.
+	numChecks := 2
+	errc := make(chan error, numChecks)
+	check := func() {
+		errc <- <-tx.Check()
+	}
+	// Ensure the freelist is not reloaded and does not race.
+	for i := 0; i < numChecks; i++ {
+		go check()
+	}
+	for i := 0; i < numChecks; i++ {
+		if err := <-errc; err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Close the view transaction
+	tx.Rollback()
+}
 
 // Ensure that committing a closed transaction returns an error.
 func TestTx_Commit_ErrTxClosed(t *testing.T) {
@@ -48,7 +97,7 @@ func TestTx_Commit_ErrTxClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := tx.Commit(); err != memory.ErrTxClosed {
+	if err := tx.Commit(); err != memcache.ErrTxClosed {
 		t.Fatalf("unexpected error: %s", err)
 	}
 }
@@ -66,7 +115,7 @@ func TestTx_Rollback_ErrTxClosed(t *testing.T) {
 	if err := tx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.Rollback(); err != memory.ErrTxClosed {
+	if err := tx.Rollback(); err != memcache.ErrTxClosed {
 		t.Fatalf("unexpected error: %s", err)
 	}
 }
@@ -79,16 +128,18 @@ func TestTx_Commit_ErrTxNotWritable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.Commit(); err != memory.ErrTxNotWritable {
+	if err := tx.Commit(); err != memcache.ErrTxNotWritable {
 		t.Fatal(err)
 	}
+	// Close the view transaction
+	tx.Rollback()
 }
 
 // Ensure that a transaction can retrieve a cursor on the root bucket.
 func TestTx_Cursor(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		if _, err := tx.CreateBucket([]byte("widgets")); err != nil {
 			t.Fatal(err)
 		}
@@ -126,9 +177,9 @@ func TestTx_Cursor(t *testing.T) {
 func TestTx_CreateBucket_ErrTxNotWritable(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.View(func(tx *memory.Tx) error {
+	if err := db.View(func(tx *memcache.Tx) error {
 		_, err := tx.CreateBucket([]byte("foo"))
-		if err != memory.ErrTxNotWritable {
+		if err != memcache.ErrTxNotWritable {
 			t.Fatalf("unexpected error: %s", err)
 		}
 		return nil
@@ -149,7 +200,7 @@ func TestTx_CreateBucket_ErrTxClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := tx.CreateBucket([]byte("foo")); err != memory.ErrTxClosed {
+	if _, err := tx.CreateBucket([]byte("foo")); err != memcache.ErrTxClosed {
 		t.Fatalf("unexpected error: %s", err)
 	}
 }
@@ -158,7 +209,7 @@ func TestTx_CreateBucket_ErrTxClosed(t *testing.T) {
 func TestTx_Bucket(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		if _, err := tx.CreateBucket([]byte("widgets")); err != nil {
 			t.Fatal(err)
 		}
@@ -175,7 +226,7 @@ func TestTx_Bucket(t *testing.T) {
 func TestTx_Get_NotFound(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		b, err := tx.CreateBucket([]byte("widgets"))
 		if err != nil {
 			t.Fatal(err)
@@ -199,7 +250,7 @@ func TestTx_CreateBucket(t *testing.T) {
 	defer db.MustClose()
 
 	// Create a bucket.
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		b, err := tx.CreateBucket([]byte("widgets"))
 		if err != nil {
 			t.Fatal(err)
@@ -212,7 +263,7 @@ func TestTx_CreateBucket(t *testing.T) {
 	}
 
 	// Read the bucket through a separate transaction.
-	if err := db.View(func(tx *memory.Tx) error {
+	if err := db.View(func(tx *memcache.Tx) error {
 		if tx.Bucket([]byte("widgets")) == nil {
 			t.Fatal("expected bucket")
 		}
@@ -226,7 +277,7 @@ func TestTx_CreateBucket(t *testing.T) {
 func TestTx_CreateBucketIfNotExists(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		// Create bucket.
 		if b, err := tx.CreateBucketIfNotExists([]byte("widgets")); err != nil {
 			t.Fatal(err)
@@ -247,7 +298,7 @@ func TestTx_CreateBucketIfNotExists(t *testing.T) {
 	}
 
 	// Read the bucket through a separate transaction.
-	if err := db.View(func(tx *memory.Tx) error {
+	if err := db.View(func(tx *memcache.Tx) error {
 		if tx.Bucket([]byte("widgets")) == nil {
 			t.Fatal("expected bucket")
 		}
@@ -261,12 +312,12 @@ func TestTx_CreateBucketIfNotExists(t *testing.T) {
 func TestTx_CreateBucketIfNotExists_ErrBucketNameRequired(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.Update(func(tx *memory.Tx) error {
-		if _, err := tx.CreateBucketIfNotExists([]byte{}); err != memory.ErrBucketNameRequired {
+	if err := db.Update(func(tx *memcache.Tx) error {
+		if _, err := tx.CreateBucketIfNotExists([]byte{}); err != memcache.ErrBucketNameRequired {
 			t.Fatalf("unexpected error: %s", err)
 		}
 
-		if _, err := tx.CreateBucketIfNotExists(nil); err != memory.ErrBucketNameRequired {
+		if _, err := tx.CreateBucketIfNotExists(nil); err != memcache.ErrBucketNameRequired {
 			t.Fatalf("unexpected error: %s", err)
 		}
 
@@ -282,7 +333,7 @@ func TestTx_CreateBucket_ErrBucketExists(t *testing.T) {
 	defer db.MustClose()
 
 	// Create a bucket.
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		if _, err := tx.CreateBucket([]byte("widgets")); err != nil {
 			t.Fatal(err)
 		}
@@ -292,8 +343,8 @@ func TestTx_CreateBucket_ErrBucketExists(t *testing.T) {
 	}
 
 	// Create the same bucket again.
-	if err := db.Update(func(tx *memory.Tx) error {
-		if _, err := tx.CreateBucket([]byte("widgets")); err != memory.ErrBucketExists {
+	if err := db.Update(func(tx *memcache.Tx) error {
+		if _, err := tx.CreateBucket([]byte("widgets")); err != memcache.ErrBucketExists {
 			t.Fatalf("unexpected error: %s", err)
 		}
 		return nil
@@ -306,8 +357,8 @@ func TestTx_CreateBucket_ErrBucketExists(t *testing.T) {
 func TestTx_CreateBucket_ErrBucketNameRequired(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.Update(func(tx *memory.Tx) error {
-		if _, err := tx.CreateBucket(nil); err != memory.ErrBucketNameRequired {
+	if err := db.Update(func(tx *memcache.Tx) error {
+		if _, err := tx.CreateBucket(nil); err != memcache.ErrBucketNameRequired {
 			t.Fatalf("unexpected error: %s", err)
 		}
 		return nil
@@ -322,7 +373,7 @@ func TestTx_DeleteBucket(t *testing.T) {
 	defer db.MustClose()
 
 	// Create a bucket and add a value.
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		b, err := tx.CreateBucket([]byte("widgets"))
 		if err != nil {
 			t.Fatal(err)
@@ -336,7 +387,7 @@ func TestTx_DeleteBucket(t *testing.T) {
 	}
 
 	// Delete the bucket and make sure we can't get the value.
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		if err := tx.DeleteBucket([]byte("widgets")); err != nil {
 			t.Fatal(err)
 		}
@@ -348,7 +399,7 @@ func TestTx_DeleteBucket(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		// Create the bucket again and make sure there's not a phantom value.
 		b, err := tx.CreateBucket([]byte("widgets"))
 		if err != nil {
@@ -374,7 +425,7 @@ func TestTx_DeleteBucket_ErrTxClosed(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.DeleteBucket([]byte("foo")); err != memory.ErrTxClosed {
+	if err := tx.DeleteBucket([]byte("foo")); err != memcache.ErrTxClosed {
 		t.Fatalf("unexpected error: %s", err)
 	}
 }
@@ -383,8 +434,8 @@ func TestTx_DeleteBucket_ErrTxClosed(t *testing.T) {
 func TestTx_DeleteBucket_ReadOnly(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.View(func(tx *memory.Tx) error {
-		if err := tx.DeleteBucket([]byte("foo")); err != memory.ErrTxNotWritable {
+	if err := db.View(func(tx *memcache.Tx) error {
+		if err := tx.DeleteBucket([]byte("foo")); err != memcache.ErrTxNotWritable {
 			t.Fatalf("unexpected error: %s", err)
 		}
 		return nil
@@ -397,8 +448,8 @@ func TestTx_DeleteBucket_ReadOnly(t *testing.T) {
 func TestTx_DeleteBucket_NotFound(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.Update(func(tx *memory.Tx) error {
-		if err := tx.DeleteBucket([]byte("widgets")); err != memory.ErrBucketNotFound {
+	if err := db.Update(func(tx *memcache.Tx) error {
+		if err := tx.DeleteBucket([]byte("widgets")); err != memcache.ErrBucketNotFound {
 			t.Fatalf("unexpected error: %s", err)
 		}
 		return nil
@@ -412,7 +463,7 @@ func TestTx_DeleteBucket_NotFound(t *testing.T) {
 func TestTx_ForEach_NoError(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		b, err := tx.CreateBucket([]byte("widgets"))
 		if err != nil {
 			t.Fatal(err)
@@ -421,7 +472,7 @@ func TestTx_ForEach_NoError(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := tx.ForEach(func(name []byte, b *memory.Bucket) error {
+		if err := tx.ForEach(func(name []byte, b *memcache.Bucket) error {
 			return nil
 		}); err != nil {
 			t.Fatal(err)
@@ -436,7 +487,7 @@ func TestTx_ForEach_NoError(t *testing.T) {
 func TestTx_ForEach_WithError(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		b, err := tx.CreateBucket([]byte("widgets"))
 		if err != nil {
 			t.Fatal(err)
@@ -446,7 +497,7 @@ func TestTx_ForEach_WithError(t *testing.T) {
 		}
 
 		marker := errors.New("marker")
-		if err := tx.ForEach(func(name []byte, b *memory.Bucket) error {
+		if err := tx.ForEach(func(name []byte, b *memcache.Bucket) error {
 			return marker
 		}); err != marker {
 			t.Fatalf("unexpected error: %s", err)
@@ -463,7 +514,7 @@ func TestTx_OnCommit(t *testing.T) {
 	defer db.MustClose()
 
 	var x int
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		tx.OnCommit(func() { x += 1 })
 		tx.OnCommit(func() { x += 2 })
 		if _, err := tx.CreateBucket([]byte("widgets")); err != nil {
@@ -483,7 +534,7 @@ func TestTx_OnCommit_Rollback(t *testing.T) {
 	defer db.MustClose()
 
 	var x int
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		tx.OnCommit(func() { x += 1 })
 		tx.OnCommit(func() { x += 2 })
 		if _, err := tx.CreateBucket([]byte("widgets")); err != nil {
@@ -503,7 +554,7 @@ func TestTx_CopyFile(t *testing.T) {
 	defer db.MustClose()
 
 	path := tempfile()
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		b, err := tx.CreateBucket([]byte("widgets"))
 		if err != nil {
 			t.Fatal(err)
@@ -519,18 +570,18 @@ func TestTx_CopyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.View(func(tx *memory.Tx) error {
+	if err := db.View(func(tx *memcache.Tx) error {
 		return tx.CopyFile(path, 0600)
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	db2, err := memory.Open(path, 0600, nil)
+	db2, err := memcache.Open(path, 0600, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := db2.View(func(tx *memory.Tx) error {
+	if err := db2.View(func(tx *memcache.Tx) error {
 		if v := tx.Bucket([]byte("widgets")).Get([]byte("foo")); !bytes.Equal(v, []byte("bar")) {
 			t.Fatalf("unexpected value: %v", v)
 		}
@@ -572,7 +623,7 @@ func (f *failWriter) Write(p []byte) (n int, err error) {
 func TestTx_CopyFile_Error_Meta(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		b, err := tx.CreateBucket([]byte("widgets"))
 		if err != nil {
 			t.Fatal(err)
@@ -588,7 +639,7 @@ func TestTx_CopyFile_Error_Meta(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.View(func(tx *memory.Tx) error {
+	if err := db.View(func(tx *memcache.Tx) error {
 		return tx.Copy(&failWriter{})
 	}); err == nil || err.Error() != "meta 0 copy: error injected for tests" {
 		t.Fatalf("unexpected error: %v", err)
@@ -599,7 +650,7 @@ func TestTx_CopyFile_Error_Meta(t *testing.T) {
 func TestTx_CopyFile_Error_Normal(t *testing.T) {
 	db := MustOpenDB()
 	defer db.MustClose()
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		b, err := tx.CreateBucket([]byte("widgets"))
 		if err != nil {
 			t.Fatal(err)
@@ -615,23 +666,179 @@ func TestTx_CopyFile_Error_Normal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.View(func(tx *memory.Tx) error {
+	if err := db.View(func(tx *memcache.Tx) error {
 		return tx.Copy(&failWriter{3 * db.Info().PageSize})
 	}); err == nil || err.Error() != "error injected for tests" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
+// TestTx_Rollback ensures there is no error when tx rollback whether we sync freelist or not.
+func TestTx_Rollback(t *testing.T) {
+	for _, isSyncFreelist := range []bool{false, true} {
+		// Open the database.
+		db, err := memcache.Open(tempfile(), 0666, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer os.Remove(db.Path())
+		db.NoFreelistSync = isSyncFreelist
+
+		tx, err := db.Begin(true)
+		if err != nil {
+			t.Fatalf("Error starting tx: %v", err)
+		}
+		bucket := []byte("mybucket")
+		if _, err := tx.CreateBucket(bucket); err != nil {
+			t.Fatalf("Error creating bucket: %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("Error on commit: %v", err)
+		}
+
+		tx, err = db.Begin(true)
+		if err != nil {
+			t.Fatalf("Error starting tx: %v", err)
+		}
+		b := tx.Bucket(bucket)
+		if err := b.Put([]byte("k"), []byte("v")); err != nil {
+			t.Fatalf("Error on put: %v", err)
+		}
+		// Imagine there is an error and tx needs to be rolled-back
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("Error on rollback: %v", err)
+		}
+
+		tx, err = db.Begin(false)
+		if err != nil {
+			t.Fatalf("Error starting tx: %v", err)
+		}
+		b = tx.Bucket(bucket)
+		if v := b.Get([]byte("k")); v != nil {
+			t.Fatalf("Value for k should not have been stored")
+		}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("Error on rollback: %v", err)
+		}
+
+	}
+}
+
+// TestTx_releaseRange ensures db.freePages handles page releases
+// correctly when there are transaction that are no longer reachable
+// via any read/write transactions and are "between" ongoing read
+// transactions, which requires they must be freed by
+// freelist.releaseRange.
+func TestTx_releaseRange(t *testing.T) {
+	// Set initial mmap size well beyond the limit we will hit in this
+	// test, since we are testing with long running read transactions
+	// and will deadlock if db.grow is triggered.
+	db := MustOpenWithOption(&memcache.Options{InitialMmapSize: os.Getpagesize() * 100})
+	defer db.MustClose()
+
+	bucket := "bucket"
+
+	put := func(key, value string) {
+		if err := db.Update(func(tx *memcache.Tx) error {
+			b, err := tx.CreateBucketIfNotExists([]byte(bucket))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b.Put([]byte(key), []byte(value))
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	del := func(key string) {
+		if err := db.Update(func(tx *memcache.Tx) error {
+			b, err := tx.CreateBucketIfNotExists([]byte(bucket))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return b.Delete([]byte(key))
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	getWithTxn := func(txn *memcache.Tx, key string) []byte {
+		return txn.Bucket([]byte(bucket)).Get([]byte(key))
+	}
+
+	openReadTxn := func() *memcache.Tx {
+		readTx, err := db.Begin(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return readTx
+	}
+
+	checkWithReadTxn := func(txn *memcache.Tx, key string, wantValue []byte) {
+		value := getWithTxn(txn, key)
+		if !bytes.Equal(value, wantValue) {
+			t.Errorf("Wanted value to be %s for key %s, but got %s", wantValue, key, string(value))
+		}
+	}
+
+	rollback := func(txn *memcache.Tx) {
+		if err := txn.Rollback(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	put("k1", "v1")
+	rtx1 := openReadTxn()
+	put("k2", "v2")
+	hold1 := openReadTxn()
+	put("k3", "v3")
+	hold2 := openReadTxn()
+	del("k3")
+	rtx2 := openReadTxn()
+	del("k1")
+	hold3 := openReadTxn()
+	del("k2")
+	hold4 := openReadTxn()
+	put("k4", "v4")
+	hold5 := openReadTxn()
+
+	// Close the read transactions we established to hold a portion of the pages in pending state.
+	rollback(hold1)
+	rollback(hold2)
+	rollback(hold3)
+	rollback(hold4)
+	rollback(hold5)
+
+	// Execute a write transaction to trigger a releaseRange operation in the db
+	// that will free multiple ranges between the remaining open read transactions, now that the
+	// holds have been rolled back.
+	put("k4", "v4")
+
+	// Check that all long running reads still read correct values.
+	checkWithReadTxn(rtx1, "k1", []byte("v1"))
+	checkWithReadTxn(rtx2, "k2", []byte("v2"))
+	rollback(rtx1)
+	rollback(rtx2)
+
+	// Check that the final state is correct.
+	rtx7 := openReadTxn()
+	checkWithReadTxn(rtx7, "k1", nil)
+	checkWithReadTxn(rtx7, "k2", nil)
+	checkWithReadTxn(rtx7, "k3", nil)
+	checkWithReadTxn(rtx7, "k4", []byte("v4"))
+	rollback(rtx7)
+}
+
 func ExampleTx_Rollback() {
 	// Open the database.
-	db, err := memory.Open(tempfile(), 0666, nil)
+	db, err := memcache.Open(tempfile(), 0666, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer os.Remove(db.Path())
 
 	// Create a bucket.
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		_, err := tx.CreateBucket([]byte("widgets"))
 		return err
 	}); err != nil {
@@ -639,7 +846,7 @@ func ExampleTx_Rollback() {
 	}
 
 	// Set a value for a key.
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		return tx.Bucket([]byte("widgets")).Put([]byte("foo"), []byte("bar"))
 	}); err != nil {
 		log.Fatal(err)
@@ -659,7 +866,7 @@ func ExampleTx_Rollback() {
 	}
 
 	// Ensure that our original value is still set.
-	if err := db.View(func(tx *memory.Tx) error {
+	if err := db.View(func(tx *memcache.Tx) error {
 		value := tx.Bucket([]byte("widgets")).Get([]byte("foo"))
 		fmt.Printf("The value for 'foo' is still: %s\n", value)
 		return nil
@@ -678,14 +885,14 @@ func ExampleTx_Rollback() {
 
 func ExampleTx_CopyFile() {
 	// Open the database.
-	db, err := memory.Open(tempfile(), 0666, nil)
+	db, err := memcache.Open(tempfile(), 0666, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer os.Remove(db.Path())
 
 	// Create a bucket and a key.
-	if err := db.Update(func(tx *memory.Tx) error {
+	if err := db.Update(func(tx *memcache.Tx) error {
 		b, err := tx.CreateBucket([]byte("widgets"))
 		if err != nil {
 			return err
@@ -700,7 +907,7 @@ func ExampleTx_CopyFile() {
 
 	// Copy the database to another file.
 	toFile := tempfile()
-	if err := db.View(func(tx *memory.Tx) error {
+	if err := db.View(func(tx *memcache.Tx) error {
 		return tx.CopyFile(toFile, 0666)
 	}); err != nil {
 		log.Fatal(err)
@@ -708,13 +915,13 @@ func ExampleTx_CopyFile() {
 	defer os.Remove(toFile)
 
 	// Open the cloned database.
-	db2, err := memory.Open(toFile, 0666, nil)
+	db2, err := memcache.Open(toFile, 0666, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// Ensure that the key exists in the copy.
-	if err := db2.View(func(tx *memory.Tx) error {
+	if err := db2.View(func(tx *memcache.Tx) error {
 		value := tx.Bucket([]byte("widgets")).Get([]byte("foo"))
 		fmt.Printf("The value for 'foo' in the clone is: %s\n", value)
 		return nil

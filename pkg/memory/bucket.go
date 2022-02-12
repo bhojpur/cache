@@ -720,7 +720,7 @@ func (b *Bucket) dereference() {
 	}
 }
 
-// pageNode returns the in-memory node, if it exists.
+// pageNode returns the Bhojpur Cache in-memory storage node, if it exists.
 // Otherwise returns the underlying page.
 func (b *Bucket) pageNode(id pgid) (*page, *node) {
 	// Inline buckets have a fake page embedded in their value so treat them

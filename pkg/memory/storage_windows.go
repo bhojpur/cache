@@ -26,38 +26,9 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
-
-var (
-	modkernel32      = syscall.NewLazyDLL("kernel32.dll")
-	procLockFileEx   = modkernel32.NewProc("LockFileEx")
-	procUnlockFileEx = modkernel32.NewProc("UnlockFileEx")
-)
-
-const (
-	lockExt = ".lock"
-
-	flagLockExclusive       = 2
-	flagLockFailImmediately = 1
-
-	errLockViolation syscall.Errno = 0x21
-)
-
-func lockFileEx(h syscall.Handle, flags, reserved, locklow, lockhigh uint32, ol *syscall.Overlapped) (err error) {
-	r, _, err := procLockFileEx.Call(uintptr(h), uintptr(flags), uintptr(reserved), uintptr(locklow), uintptr(lockhigh), uintptr(unsafe.Pointer(ol)))
-	if r == 0 {
-		return err
-	}
-	return nil
-}
-
-func unlockFileEx(h syscall.Handle, reserved, locklow, lockhigh uint32, ol *syscall.Overlapped) (err error) {
-	r, _, err := procUnlockFileEx.Call(uintptr(h), uintptr(reserved), uintptr(locklow), uintptr(lockhigh), uintptr(unsafe.Pointer(ol)), 0)
-	if r == 0 {
-		return err
-	}
-	return nil
-}
 
 // fdatasync flushes written data to a file descriptor.
 func fdatasync(db *DB) error {
@@ -65,49 +36,46 @@ func fdatasync(db *DB) error {
 }
 
 // flock acquires an advisory lock on a file descriptor.
-func flock(db *DB, mode os.FileMode, exclusive bool, timeout time.Duration) error {
-	// Create a separate lock file on windows because a process
-	// cannot share an exclusive lock on the same file. This is
-	// needed during Tx.WriteTo().
-	f, err := os.OpenFile(db.path+lockExt, os.O_CREATE, mode)
-	if err != nil {
-		return err
-	}
-	db.lockfile = f
-
+func flock(db *DB, exclusive bool, timeout time.Duration) error {
 	var t time.Time
+	if timeout != 0 {
+		t = time.Now()
+	}
+	var flags uint32 = windows.LOCKFILE_FAIL_IMMEDIATELY
+	if exclusive {
+		flags |= windows.LOCKFILE_EXCLUSIVE_LOCK
+	}
 	for {
-		// If we're beyond our timeout then return an error.
-		// This can only occur after we've attempted a flock once.
-		if t.IsZero() {
-			t = time.Now()
-		} else if timeout > 0 && time.Since(t) > timeout {
-			return ErrTimeout
-		}
+		// -1..0 as the lock on the database file.
+		var m1 uint32 = (1 << 32) - 1 // -1 in a uint32
+		err := windows.LockFileEx(windows.Handle(db.file.Fd()), flags, 0, 1, 0, &windows.Overlapped{
+			Offset:     m1,
+			OffsetHigh: m1,
+		})
 
-		var flag uint32 = flagLockFailImmediately
-		if exclusive {
-			flag |= flagLockExclusive
-		}
-
-		err := lockFileEx(syscall.Handle(db.lockfile.Fd()), flag, 0, 1, 0, &syscall.Overlapped{})
 		if err == nil {
 			return nil
-		} else if err != errLockViolation {
+		} else if err != windows.ERROR_LOCK_VIOLATION {
 			return err
 		}
 
+		// If we timed oumercit then return an error.
+		if timeout != 0 && time.Since(t) > timeout-flockRetryTimeout {
+			return ErrTimeout
+		}
+
 		// Wait for a bit and try again.
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(flockRetryTimeout)
 	}
 }
 
 // funlock releases an advisory lock on a file descriptor.
 func funlock(db *DB) error {
-	err := unlockFileEx(syscall.Handle(db.lockfile.Fd()), 0, 1, 0, &syscall.Overlapped{})
-	db.lockfile.Close()
-	os.Remove(db.path + lockExt)
-	return err
+	var m1 uint32 = (1 << 32) - 1 // -1 in a uint32
+	return windows.UnlockFileEx(windows.Handle(db.file.Fd()), 0, 1, 0, &windows.Overlapped{
+		Offset:     m1,
+		OffsetHigh: m1,
+	})
 }
 
 // mmap memory maps a DB's data file.

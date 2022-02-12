@@ -1,0 +1,6 @@
+<%! func nav(w io.Writer, tx *memory.Tx) error %>
+
+<%% import "path/filepath" %%>
+<%% import mamcache "github.com/bhojpur/cache/pkg/memory" %%>
+
+<h1><%= filepath.Base(tx.DB().Path()) %></h1>
